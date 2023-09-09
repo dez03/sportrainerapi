@@ -1,0 +1,194 @@
+service: sportrainerapi
+
+frameworkVersion: "3"
+
+custom: 
+  stage: ${opt:stage, self:provider.stage}
+  awsRegion: ${file(./config/.${opt:stage, 'dev'}.json):awsRegion}  
+  #dynamo-tables
+  questionTb: '${self:service}-questionTable-${sls:stage}'
+  usersTb: '${self:service}-usersTable-${sls:stage}'
+  
+
+provider:
+  name: aws
+  runtime: nodejs14.x
+  stage: ${opt:stage,'dev'}
+  environment: 
+    AWSREGION: ${file(./config/.${opt:stage, 'dev'}.json):awsRegion}
+    FROMEMAIL: ${file(./config/.${opt:stage, 'dev'}.json):fromEmail}
+    DEVELOPEREMAIL: ${file(./config/.${opt:stage, 'dev'}.json):developerEmail}
+    QUESTIONTABLE: ${self:custom.questionTb}
+    user_pool_id: { Ref: UserPool }
+    client_id: { Ref: UserClient }
+    USERTABLE: ${self:custom.usersTb}
+  iam: 
+    role:
+      statements:
+      - Effect: Allow
+        Action:
+          - ses:SendEmail
+          - ses:SendRawEmail
+          # Cognito Code
+          - cognito-idp:AdminInitiateAuth
+          - cognito-idp:AdminCreateUser
+          - cognito-idp:AdminSetUserPassword
+        Resource: "*"
+
+
+
+      - Effect: Allow
+        Action:
+          - dynamodb:Query
+          - dynamodb:Scan
+          - dynamodb:GetItem
+          - dynamodb:PutItem
+          - dynamodb:UpdateItem
+          - dynamodb:DeleteItem
+        Resource: 
+          - Fn::GetAtt: [ QuestionsTb, Arn ]
+          - Fn::Join:
+            - "/"
+            -
+              - { "Fn::GetAtt": ["QuestionsTb", "Arn" ] }
+              - "index/*"
+          - Fn::GetAtt: [ UsersTb, Arn ]
+          - Fn::Join:
+            - "/"
+            -
+              - { "Fn::GetAtt": ["UsersTb", "Arn" ] }
+              - "index/*"
+
+
+
+functions:
+  quizSingleQFn:
+    handler: quiz-handler/single.handler
+    events:
+      - http:
+          path: quiz/questions/{id}
+          method: get
+          cors: true
+          # private: true
+
+  quizNewQFunction:
+    handler: quiz-handler/new.handler
+    events:
+      - http:
+          path: quiz/questions/new
+          method: post
+          cors: true
+          # private: true
+
+#Cognito Lambda Functions for user Logins, Sign-ups, and private routes          
+  loginUser:
+    handler: user/login.handler
+    events:
+      - http:
+          path: user/login
+          method: post
+          cors: true
+
+  signupUser:
+    handler: user/signup.handler
+    events:
+      - http:
+          path: user/signup
+          method: post
+          cors: true
+
+  verifyEmailInDB:
+    handler: user/verifyEmail.handler
+    events:
+      - http:
+          path: user/signup/verifyEmail
+          method: post
+          cors: true
+
+  privateAPI:
+    handler: user/private.handler
+    events:
+      - http:
+          path: user/private
+          method: post
+          cors: true
+          authorizer:
+            name: PrivateAuthorizer
+            type: COGNITO_USER_POOLS
+            arn:
+              Fn::GetAtt:
+                - UserPool
+                - Arn
+            claims:
+              - email
+
+
+resources:
+  Resources:
+
+# table 1
+    QuestionsTb:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        AttributeDefinitions:
+          - AttributeName: id
+            AttributeType: S
+        KeySchema:
+          - AttributeName: id
+            KeyType: HASH
+        BillingMode: PAY_PER_REQUEST
+        TableName: ${self:custom.questionTb}
+    
+    
+    UsersTb:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        AttributeDefinitions:
+          - AttributeName: id
+            AttributeType: S
+          - AttributeName: email
+            AttributeType: S
+        KeySchema:
+          - AttributeName: id
+            KeyType: HASH
+        GlobalSecondaryIndexes:
+          - IndexName: indexEmail
+            KeySchema:
+              - AttributeName: email
+                KeyType: HASH
+              - AttributeName: id
+                KeyType: RANGE
+            Projection:
+              ProjectionType: 'ALL'
+        BillingMode: PAY_PER_REQUEST
+        TableName: ${self:custom.usersTb}
+
+    UserPool:
+      Type: AWS::Cognito::UserPool
+      Properties:
+        UserPoolName: serverless-auth-pool
+        Schema:
+          - Name: email
+            Required: true
+            Mutable: true
+        Policies:
+          PasswordPolicy:
+            MinimumLength: 6 # number of hours the access token is valid
+
+          #TODO Add a verification feature for emails
+        AutoVerifiedAttributes: ["email"]
+        
+
+    UserClient:
+      Type: AWS::Cognito::UserPoolClient
+      Properties:
+        ClientName: user-pool-ui
+        GenerateSecret: false
+        UserPoolId: { Ref: UserPool }
+        AccessTokenValidity: 5
+        IdTokenValidity: 5
+        ExplicitAuthFlows:
+          - "ADMIN_NO_SRP_AUTH"
+
+
+
