@@ -54,14 +54,15 @@ const item = {
 }
 await addNewUser(item);
 return sendResponse(200, {
+  success: true,
   message: "User registration successful",
 });
 
 } catch(error){
 // console.log(error)
 if (error.code == "UsernameExistsException"){
-  return sendResponse(500, {
-    success: true,
+  return sendResponse(200, {
+    success: false,
     message: "Email is already registered.",
   });
 }
